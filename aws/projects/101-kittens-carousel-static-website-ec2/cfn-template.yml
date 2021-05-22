@@ -1,0 +1,51 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  This template is create an EC2 Instance for my first project
+
+Resources:
+  CFNInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+         
+      ImageId: ami-0533f2ba8a1995cf9
+
+      InstanceType: t2.micro
+      
+      KeyName: mykey1 
+      
+      SecurityGroups:
+        - cfn-sec-group
+  
+      Tags:
+        - Key: Name
+          Value: Web Server of StackName
+
+      UserData: 
+        Fn::Base64: 
+          !Sub |
+            #! /bin/bash
+
+            yum update -y
+            yum install -y httpd
+            systemctl start httpd
+            cd /var/www/html/
+            chmod -R 777 /var/www/html
+            rm index.html
+            wget https://raw.githubusercontent.com/enes789/aws-devops/main/aws/projects/101-kittens-carousel-static-website-ec2/static-web/index.html 
+            wget https://raw.githubusercontent.com/enes789/aws-devops/main/aws/projects/101-kittens-carousel-static-website-ec2/static-web/cat0.jpg 
+            wget https://raw.githubusercontent.com/enes789/aws-devops/main/aws/projects/101-kittens-carousel-static-website-ec2/static-web/cat1.jpg
+            wget https://raw.githubusercontent.com/enes789/aws-devops/main/aws/projects/101-kittens-carousel-static-website-ec2/static-web/cat2.jpg
+
+            systemctl restart httpd
+            systemctl enable httpd
+
+Outputs:
+  WebsiteURL:
+    Description: URL for newly created stack
+    Value: !Join 
+      - ''
+      - - 'http://'
+        - !GetAtt 
+          - CFNInstance
+          - PublicDnsName 
+     

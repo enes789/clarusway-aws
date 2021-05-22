@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  This template will create Load Balancer with ASG.
+  So it will include Security group Launch Template, LOad Balancer,
+  Auto Scaling Group, ALB Lİstener, CPU Policy.And it gives a output to 
+  se result of what was done.
+Parameters:
+  EnesVPC:
+    Description: This is VPC Id of my account
+    Type: AWS::EC2::VPC::Id
+  EnesSubnets:
+    Description: This is Subnets of default VPC
+    Type: List<AWS::EC2::Subnet::Id>
+  Keyname:
+    Description: This is options of my key names
+    Type: AWS::EC2::KeyPair::KeyName
+  InstanceTypeParameter:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3a.micro
+      - t2.nano
+      - t3.nano
+    Description: Enter t2.micro, m1.small, or m1.large. Default is t2.micro.
+ 
+
+Mappings:
+  RegionImageMap:
+    us-east-1:
+      AMI: ami-0742b4e673072066f
+    us-east-2:
+      AMI: ami-05d72852800cbf29e
+    us-west-1:
+      AMI: ami-0577b787189839998
+    us-west-2:
+      AMI: ami-0518bb0e75d3619ca
+    eu-west-1:
+      AMI: ami-0ffea00000f287d30
+ 
+
+Resources:
+  EnesSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP and SSH #required
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Enes-sec-group
+      VpcId: !Ref EnesVPC
+
+  EnesTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 25
+      HealthCheckPort: traffic-port
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      Name: Enes-Deneme
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref EnesVPC
+
+  EnesALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      SecurityGroups:
+        - !GetAtt EnesSecGroup.GroupId
+      Subnets: !Ref EnesSubnets
+
+  EnesListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions: #required
+        - Type: forward
+          TargetGroupArn: !Ref EnesTargetGroup
+      LoadBalancerArn: !Ref EnesALB #required
+      Port: 80
+      Protocol: HTTP
+
+  EnesLT:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+          ImageId: !FindInMap 
+            - RegionImageMap
+            - !Ref AWS::Region
+            - AMI
+          KeyName: !Ref Keyname
+          SecurityGroupIds: 
+            - !Ref EnesSecGroup
+          InstanceType: !Ref InstanceTypeParameter
+          UserData: !Base64 |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd
+            TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` \
+            && PRIVATE_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4`
+            TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` \
+            && PUBLIC_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4` 
+            DATE_TIME=`date`
+            chmod -R 777 /var/www/html
+            echo "<html>
+            <head>
+                <title> Congratulations! You have created an instance from Launch Template</title>
+            </head>
+            <body>
+                <h1>This web server is launched from launch template by YOUR_NAME</h1>
+                <p>This instance is created at <b>$DATE_TIME</b></p>
+                <p>Private IP address of this instance is <b>$PRIVATE_IP</b></p>
+                <p>Public IP address of this instance is <b>$PUBLIC_IP</b></p>
+            </body>
+            </html>" > /var/www/html/index.html
+            systemctl start httpd
+            systemctl enable httpd
+
+  EnesASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones: !GetAZs 
+      HealthCheckGracePeriod: 200
+      HealthCheckType: ELB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref EnesLT
+        Version: '1'
+      DesiredCapacity: '2'
+      MaxSize: '3' #required
+      MinSize: '1' #required
+      TargetGroupARNs: 
+        - !Ref EnesTargetGroup
+
+  EnesCPUPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref EnesASG #required
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 40.0
+
+Outputs:
+  AppURL:
+    Value: !Sub 
+      - http://${PublicAddress}
+      - PublicAddress: !GetAtt EnesALB.DNSName
+    Description: URL of the App

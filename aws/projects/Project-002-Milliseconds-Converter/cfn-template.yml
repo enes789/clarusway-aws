@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  CloudFormation Template for Milliseconds Converter Application. 
+  This template creates Python Flask Web Application on Amazon Linux 2 (XXXXXXXXXXXXXXXXX) 
+  EC2 Instance with custom security group allowing http connections on port 80 and SSH connection on port 22.
+  Template should create Application Load Balancer with Auto Scaling Group of Amazon Linux 2 EC2 Instances within default VPC.
+  Roman Numerals Converter Application is downloaded from Github repository, then installed on Flask.
+
+Parameters:
+  EnesVPC:
+    Description: This is VPC Id of my account
+    Type: AWS::EC2::VPC::Id
+  EnesSubnets:
+    Description: This is Subnets of default VPC
+    Type: List<AWS::EC2::Subnet::Id>
+  Keyname:
+    Description: This is options of my key names
+    Type: AWS::EC2::KeyPair::KeyName
+  InstanceTypeParameter:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3a.micro
+      - t2.nano
+      - t3.nano
+    Description: Enter t2.micro, m1.small, or m1.large. Default is t2.micro.
+ 
+Resources:
+  EnesSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP and SSH #required
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Enes-sec-group
+      VpcId: !Ref EnesVPC
+
+  EnesTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 25
+      HealthCheckPort: traffic-port
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      Name: Enes-Deneme
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref EnesVPC
+
+  EnesALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      SecurityGroups:
+        - !GetAtt EnesSecGroup.GroupId
+      Subnets: !Ref EnesSubnets
+
+  EnesListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions: #required
+        - Type: forward
+          TargetGroupArn: !Ref EnesTargetGroup
+      LoadBalancerArn: !Ref EnesALB #required
+      Port: 80
+      Protocol: HTTP
+
+  EnesLT:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+          ImageId: ami-0742b4e673072066f
+          KeyName: !Ref Keyname
+          SecurityGroupIds: 
+            - !Ref EnesSecGroup
+          InstanceType: !Ref InstanceTypeParameter
+          UserData: !Base64 |
+            #! /bin/bash
+            yum update -y
+            yum install python3 -y
+            pip3 install flask
+            cd /home/ec2-user
+            FOLDER='https://raw.githubusercontent.com/enes789/aws-devops/main/aws/projects/Project-002-Milliseconds-Converter'
+            wget $FOLDER/app.py
+            wget -P templates $FOLDER/templates/index.html
+            wget -P templates $FOLDER/templates/result.html
+            python3 app.py
+
+  EnesASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones: !GetAZs 
+      HealthCheckGracePeriod: 200
+      HealthCheckType: ELB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref EnesLT
+        Version: '1'
+      DesiredCapacity: '2'
+      MaxSize: '3' #required
+      MinSize: '1' #required
+      TargetGroupARNs: 
+        - !Ref EnesTargetGroup
+
+  EnesCPUPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref EnesASG #required
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 40.0
+
+Outputs:
+  AppURL:
+    Value: !Sub 
+      - http://${PublicAddress}
+      - PublicAddress: !GetAtt EnesALB.DNSName
+    Description: URL of the Milliseconds Application
